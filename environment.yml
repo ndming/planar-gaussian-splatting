@@ -21,6 +21,7 @@ dependencies:
     - opencv-python
     - lpips
     - trimesh
+    - scikit-image
     - tensorboard
     - submodules/diff-plane-rasterization
     - submodules/simple-knn
