@@ -63,7 +63,7 @@ def post_process_mesh(mesh, cluster_to_keep=1):
     return mesh_0
 
 def render_set(model_path, name, iteration, views, scene, gaussians, pipeline, background, 
-               app_model=None, max_depth=5.0, volume=None, use_depth_filter=False):
+               app_model=None, max_depth=5.0, volume=None, use_depth_filter=False, ignore_file=None):
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     render_depth_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders_depth")
@@ -114,7 +114,20 @@ def render_set(model_path, name, iteration, views, scene, gaussians, pipeline, b
         
     if volume is not None:
         depths_tsdf_fusion = torch.stack(depths_tsdf_fusion, dim=0)
+        
+        ignore_views = []
+        if ignore_file:
+            with open(ignore_file, "r") as f:
+                contents = f.read()
+                ignore_views = contents.split()
+        print(f"Read {len(ignore_views)} ignore views")
+        
+        ignore_count = 0
         for idx, view in enumerate(tqdm(views, desc="TSDF Fusion progress")):
+            if view.image_name in ignore_views:
+                ignore_count += 1
+                continue
+            
             ref_depth = depths_tsdf_fusion[idx].cuda()
 
             if view.mask is not None:
@@ -133,9 +146,11 @@ def render_set(model_path, name, iteration, views, scene, gaussians, pipeline, b
                 rgbd,
                 o3d.camera.PinholeCameraIntrinsic(W, H, view.Fx, view.Fy, view.Cx, view.Cy),
                 pose)
+        
+        print(f"Ignored {ignore_count} views for TSDF integration")
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool,
-                 max_depth : float, voxel_size : float, num_cluster: int, use_depth_filter : bool):
+                 max_depth : float, voxel_size : float, num_cluster: int, use_depth_filter : bool, ignore_file : str = ""):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
@@ -153,7 +168,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 
         if not skip_train:
             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), scene, gaussians, pipeline, background, 
-                       max_depth=max_depth, volume=volume, use_depth_filter=use_depth_filter)
+                       max_depth=max_depth, volume=volume, use_depth_filter=use_depth_filter, ignore_file=ignore_file)
             print(f"extract_triangle_mesh")
             mesh = volume.extract_triangle_mesh()
 
@@ -184,6 +199,7 @@ if __name__ == "__main__":
     parser.add_argument("--voxel_size", default=0.002, type=float)
     parser.add_argument("--num_cluster", default=1, type=int)
     parser.add_argument("--use_depth_filter", action="store_true")
+    parser.add_argument("--ignore_file", default="", type=str, help="file containing views to ignore for TSDF")
 
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
@@ -191,4 +207,4 @@ if __name__ == "__main__":
     # Initialize system state (RNG)
     safe_state(args.quiet)
     print(f"multi_view_num {model.multi_view_num}")
-    render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, args.max_depth, args.voxel_size, args.num_cluster, args.use_depth_filter)
+    render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, args.max_depth, args.voxel_size, args.num_cluster, args.use_depth_filter, args.ignore_file)
