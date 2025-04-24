@@ -291,7 +291,108 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
                            ply_path=ply_path)
     return scene_info
 
+def readAssemblySceneCameraInfo(view_dir, ref_focal_length, translation_scale, extension):
+    cam_file = view_dir / "worker_reg_fine_dump.json"
+    with open(cam_file, "r") as f:
+        camera = json.load(f)
+
+    image_file = view_dir / f"image.{extension}"
+    mask_file = view_dir / f"mask.{extension}"
+    image = Image.open(image_file)
+    width, height = image.size
+
+    intrinsics = camera["cam_matrix"]
+    focal_length_x = intrinsics[0][0]
+    focal_length_y = intrinsics[1][1]
+    if not ref_focal_length:
+        print(f"[>] Reference focal length x: {focal_length_x:4f}")
+        print(f"[>] Reference focal length y: {focal_length_y:4f}")
+        ref_focal_length.append(focal_length_x)
+        ref_focal_length.append(focal_length_y)
+    else:
+        if abs(ref_focal_length[0] - focal_length_x) > 1e-5 or abs(ref_focal_length[1] - focal_length_y) > 1e-5:
+            print(f"[!] Error: Focal length mismatch in {view_dir.name} ({focal_length_x}, {focal_length_y}) vs ({ref_focal_length[0]}, {ref_focal_length[1]})")
+            raise ValueError("Focal length mismatch")
+
+    FovY = focal2fov(focal_length_y, height)
+    FovX = focal2fov(focal_length_x, width)
+
+    extrinsics = np.array(camera["pose_refined"])
+    R = np.transpose(extrinsics[:3, :3]) # store transposed due to 'glm' in CUDA code
+    T = extrinsics[:3, 3] * translation_scale
+
+    # Extract the integer from view_dir.name of format view_*
+    uid = int(view_dir.name.split('_')[1])
+    image_name = f"{uid:03d}"
+
+    cam_info = CameraInfo(
+        uid=uid, global_id=uid, R=R, T=T, FovY=FovY, FovX=FovX,
+        image_path=str(image_file), image_name=image_name, mask_path=str(mask_file),
+        width=width, height=height, fx=focal_length_x, fy=focal_length_y)
+    return cam_info
+
+def readAssemblySceneInfo(path, eval, translation_scale=.001, llffhold=8, extension="png"):
+    # Get the view directories of format view_*
+    view_dirs = [d for d in Path(path).iterdir() if d.is_dir() and d.name.startswith("view_")]
+
+    # Construct CameraInfo for each view
+    cam_infos_unsorted = []
+    ref_focal_length = []
+    for view_dir in view_dirs:
+        cam_info = readAssemblySceneCameraInfo(view_dir, ref_focal_length, translation_scale, extension)
+        cam_infos_unsorted.append(cam_info)
+    cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
+
+    js_file = f"{path}/split.json"
+    train_list = None
+    test_list = None
+    if os.path.exists(js_file):
+        with open(js_file) as file:
+            meta = json.load(file)
+            train_list = meta["train"]
+            test_list = meta["test"]
+            print(f"train_list {len(train_list)}, test_list {len(test_list)}")
+
+    if train_list is not None:
+        train_cam_infos = [c for idx, c in enumerate(cam_infos) if c.image_name in train_list]
+        test_cam_infos = [c for idx, c in enumerate(cam_infos) if c.image_name in test_list]
+        print(f"train_cam_infos {len(train_cam_infos)}, test_cam_infos {len(test_cam_infos)}")
+    elif eval:
+        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
+        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+    else:
+        train_cam_infos = cam_infos
+        test_cam_infos = []
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+
+    ply_path = Path(path) / "points3d.ply"
+    if not ply_path.exists():
+        # Since this data set has no colmap data, we start with random points
+        num_pts = 100_000
+        print(f"[>] Generating random point cloud ({num_pts})...")
+        
+        # We create random points inside the bounds -1.3 to 1.3
+        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+        shs = np.random.random((num_pts, 3)) / 255.0
+        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+
+        storePly(ply_path, xyz, SH2RGB(shs) * 255)
+    try:
+        pcd = fetchPly(ply_path)
+    except:
+        pcd = None
+
+    scene_info = SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path)
+    return scene_info
+
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
-    "Blender" : readNerfSyntheticInfo
+    "Blender": readNerfSyntheticInfo,
+    "Assembly": readAssemblySceneInfo,
 }

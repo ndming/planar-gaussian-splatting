@@ -48,6 +48,9 @@ class Scene:
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
+        elif any(subdir.startswith("view_") for subdir in os.listdir(args.source_path) if os.path.isdir(os.path.join(args.source_path, subdir))):
+            print("[>] Found view directories, assuming Assembly dataset!")
+            scene_info = sceneLoadTypeCallbacks["Assembly"](args.source_path, args.eval)
         else:
             assert False, "Could not recognize scene type!"
 
