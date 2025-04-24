@@ -48,10 +48,17 @@ def process_image(image_path, resolution, ncc_scale):
     gray_image = (0.299 * resized_image_rgb[0] + 0.587 * resized_image_rgb[1] + 0.114 * resized_image_rgb[2])[None]
     return gt_image, gray_image, loaded_mask
 
+def process_mask(mask_path, resolution):
+    mask = Image.open(mask_path).resize(resolution)
+    mask = torch.from_numpy(np.array(mask)) / 255.
+    mask = mask.unsqueeze(dim=-1)
+    return mask.permute(2, 0, 1)
+
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy,
                  image_width, image_height,
                  image_path, image_name, uid,
+                 mask_path,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, 
                  ncc_scale=1.0,
                  preload_img=True, data_device = "cuda"
@@ -88,8 +95,7 @@ class Camera(nn.Module):
             gt_image, gray_image, loaded_mask = process_image(self.image_path, self.resolution, ncc_scale)
             self.original_image = gt_image.to(self.data_device)
             self.original_image_gray = gray_image.to(self.data_device)
-            self.mask = loaded_mask
-
+            self.mask = process_mask(mask_path, self.resolution) if mask_path else loaded_mask
 
         self.zfar = 100.0
         self.znear = 0.01
