@@ -291,7 +291,7 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
                            ply_path=ply_path)
     return scene_info
 
-def readAssemblySceneCameraInfo(view_dir, ref_focal_length, translation_scale, extension):
+def readAssemblySceneCameraInfo(view_dir, ref_focal_length, cam_scale, extension):
     cam_file = view_dir / "worker_reg_fine_dump.json"
     with open(cam_file, "r") as f:
         camera = json.load(f)
@@ -318,8 +318,16 @@ def readAssemblySceneCameraInfo(view_dir, ref_focal_length, translation_scale, e
     FovX = focal2fov(focal_length_x, width)
 
     extrinsics = np.array(camera["pose_refined"])
-    R = np.transpose(extrinsics[:3, :3]) # store transposed due to 'glm' in CUDA code
-    T = extrinsics[:3, 3] * translation_scale
+    # Rt = np.zeros((4, 4))
+    # Rt[:3, :3] = extrinsics[:3, :3]
+    # Rt[:3, 3] = extrinsics[:3, 3] * cam_scale
+    # Rt[3, 3] = 1.0
+
+    # w2c = np.linalg.inv(Rt)
+    # R = np.transpose(w2c[:3, :3]) # R is stored transposed due to 'glm' in CUDA code
+    # T = w2c[:3, 3]
+    R = np.transpose(extrinsics[:3, :3])
+    T = extrinsics[:3, 3] * cam_scale
 
     # Extract the integer from view_dir.name of format view_*
     uid = int(view_dir.name.split('_')[1])
@@ -331,7 +339,7 @@ def readAssemblySceneCameraInfo(view_dir, ref_focal_length, translation_scale, e
         width=width, height=height, fx=focal_length_x, fy=focal_length_y)
     return cam_info
 
-def readAssemblySceneInfo(path, eval, translation_scale=.001, llffhold=8, extension="png"):
+def readAssemblySceneInfo(path, eval, cam_scale, llffhold=8, extension="png"):
     # Get the view directories of format view_*
     view_dirs = [d for d in Path(path).iterdir() if d.is_dir() and d.name.startswith("view_")]
 
@@ -339,7 +347,7 @@ def readAssemblySceneInfo(path, eval, translation_scale=.001, llffhold=8, extens
     cam_infos_unsorted = []
     ref_focal_length = []
     for view_dir in view_dirs:
-        cam_info = readAssemblySceneCameraInfo(view_dir, ref_focal_length, translation_scale, extension)
+        cam_info = readAssemblySceneCameraInfo(view_dir, ref_focal_length, cam_scale, extension)
         cam_infos_unsorted.append(cam_info)
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
@@ -365,14 +373,15 @@ def readAssemblySceneInfo(path, eval, translation_scale=.001, llffhold=8, extens
         test_cam_infos = []
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
+    extent = nerf_normalization["radius"]
 
-    ply_path = Path(path) / "points3d.ply"
+    ply_path = Path(path) / f"points3d-{cam_scale}.ply"
     if not ply_path.exists():
         # Since this data set has no colmap data, we start with random points
         num_pts = 100_000
         print(f"[>] Generating random point cloud ({num_pts})...")
         
-        # We create random points inside the bounds -1.3 to 1.3
+        # We create random points inside the camera extent
         xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
         shs = np.random.random((num_pts, 3)) / 255.0
         pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))

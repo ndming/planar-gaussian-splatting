@@ -57,6 +57,7 @@ class ModelParams(ParamGroup):
         self.eval = False
         self.preload_img = True
         self.ncc_scale = 1.0
+        self.cam_scale = 1.0
         self.multi_view_num = 8
         self.multi_view_max_angle = 30
         self.multi_view_min_dis = 0.01

@@ -194,3 +194,16 @@ def patch_warp(H, uv):
     grid_tmp = grid_tmp.reshape(B, P, 3)
     grid = grid_tmp[..., :2] / (grid_tmp[..., 2:] + 1e-10)
     return grid
+
+def is_orthonormal(R):
+    # Check if the matrix is 3x3
+    if R.shape != (3, 3):
+        return False
+    
+    # Check orthogonality: dot product of distinct columns should be 0
+    orthogonal = np.allclose(np.dot(R.T, R), np.eye(3))
+    
+    # Check normalization: each column should have a norm of 1
+    normal = np.allclose(np.linalg.norm(R, axis=0), 1)
+    
+    return orthogonal and normal

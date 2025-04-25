@@ -50,7 +50,7 @@ class Scene:
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
         elif any(subdir.startswith("view_") for subdir in os.listdir(args.source_path) if os.path.isdir(os.path.join(args.source_path, subdir))):
             print("[>] Found view directories, assuming Assembly dataset!")
-            scene_info = sceneLoadTypeCallbacks["Assembly"](args.source_path, args.eval)
+            scene_info = sceneLoadTypeCallbacks["Assembly"](args.source_path, args.eval, args.cam_scale)
         else:
             assert False, "Could not recognize scene type!"
 
@@ -73,7 +73,7 @@ class Scene:
             random.shuffle(scene_info.test_cameras)  # Multi-res consistent random shuffling
 
         self.cameras_extent = scene_info.nerf_normalization["radius"]
-        print(f"cameras_extent {self.cameras_extent}")
+        print(f"[>] Cameras extent: {self.cameras_extent:.4f}")
 
         self.multi_view_num = args.multi_view_num
         for resolution_scale in resolution_scales:
