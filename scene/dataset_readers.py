@@ -15,7 +15,7 @@ from PIL import Image
 from typing import NamedTuple
 from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
     read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text
-from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal
+from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal, is_orthonormal, find_intersection, correct_rotation
 import numpy as np
 import json
 from pathlib import Path
@@ -291,7 +291,7 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
                            ply_path=ply_path)
     return scene_info
 
-def readAssemblySceneCameraInfo(view_dir, ref_focal_length, cam_scale, extension):
+def readAssemblySceneCameraInfo(view_dir, ref_focal_length, cam_scale, extension="png", intersection=np.array([0., 0., 0.])):
     cam_file = view_dir / "worker_reg_fine_dump.json"
     with open(cam_file, "r") as f:
         camera = json.load(f)
@@ -317,17 +317,19 @@ def readAssemblySceneCameraInfo(view_dir, ref_focal_length, cam_scale, extension
     FovY = focal2fov(focal_length_y, height)
     FovX = focal2fov(focal_length_x, width)
 
-    extrinsics = np.array(camera["pose_refined"])
-    # Rt = np.zeros((4, 4))
-    # Rt[:3, :3] = extrinsics[:3, :3]
-    # Rt[:3, 3] = extrinsics[:3, 3] * cam_scale
-    # Rt[3, 3] = 1.0
+    w2c = np.array(camera["pose_refined"])
+    c2w = np.linalg.inv(w2c)
 
-    # w2c = np.linalg.inv(Rt)
-    # R = np.transpose(w2c[:3, :3]) # R is stored transposed due to 'glm' in CUDA code
-    # T = w2c[:3, 3]
-    R = np.transpose(extrinsics[:3, :3])
-    T = extrinsics[:3, 3] * cam_scale
+    # Scaling may need orthonormal rotation
+    if cam_scale != 1.0 and not is_orthonormal(c2w[:3, :3], atol=1e-6):
+        c2w[:3, :3] = correct_rotation(c2w[:3, :3])
+    
+    # Scale camera position with respect to the intersection point
+    c2w[:3, 3] = (c2w[:3, 3] - intersection) * cam_scale + intersection
+
+    w2c = np.linalg.inv(c2w)
+    R = np.transpose(w2c[:3, :3]) # R is stored transposed due to 'glm' in CUDA code
+    T = w2c[:3, 3]
 
     # Extract the integer from view_dir.name of format view_*
     uid = int(view_dir.name.split('_')[1])
@@ -343,11 +345,33 @@ def readAssemblySceneInfo(path, eval, cam_scale, llffhold=8, extension="png"):
     # Get the view directories of format view_*
     view_dirs = [d for d in Path(path).iterdir() if d.is_dir() and d.name.startswith("view_")]
 
+    # Peak the poses to find the intersection point
+    assembly_camera_poses = []
+    for view_dir in view_dirs:
+        cam_file = view_dir / "worker_reg_fine_dump.json"
+        with open(cam_file, "r") as f:
+            camera = json.load(f)
+
+        w2c = np.array(camera["pose_refined"])
+        c2w = np.linalg.inv(w2c)
+        R = c2w[:3, :3]
+        t = c2w[:3, 3]
+
+        if cam_scale != 1.0 and not is_orthonormal(R, atol=1e-6):
+            R = correct_rotation(R)
+
+        assembly_camera_poses.append({'R': R, 't': t})
+
+    P = np.array([pose['t'] for pose in assembly_camera_poses])
+    d = np.array([pose['R'][:, 2] for pose in assembly_camera_poses])
+    intersection_point = find_intersection(P, d)
+    print(f"[>] Intersection point: {intersection_point}")
+
     # Construct CameraInfo for each view
     cam_infos_unsorted = []
     ref_focal_length = []
     for view_dir in view_dirs:
-        cam_info = readAssemblySceneCameraInfo(view_dir, ref_focal_length, cam_scale, extension)
+        cam_info = readAssemblySceneCameraInfo(view_dir, ref_focal_length, cam_scale, extension, intersection_point)
         cam_infos_unsorted.append(cam_info)
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
@@ -382,7 +406,7 @@ def readAssemblySceneInfo(path, eval, cam_scale, llffhold=8, extension="png"):
         print(f"[>] Generating random point cloud ({num_pts})...")
         
         # We create random points inside the camera extent
-        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+        xyz = np.random.random((num_pts, 3)) * extent * 2.0 - extent
         shs = np.random.random((num_pts, 3)) / 255.0
         pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
 

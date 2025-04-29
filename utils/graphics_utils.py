@@ -195,15 +195,42 @@ def patch_warp(H, uv):
     grid = grid_tmp[..., :2] / (grid_tmp[..., 2:] + 1e-10)
     return grid
 
-def is_orthonormal(R):
+def is_orthonormal(R, atol=1e-6):
     # Check if the matrix is 3x3
     if R.shape != (3, 3):
         return False
     
-    # Check orthogonality: dot product of distinct columns should be 0
-    orthogonal = np.allclose(np.dot(R.T, R), np.eye(3))
+    # Check orthogonality: dot product of columns should form the identity matrix
+    orthogonal = np.allclose(np.dot(R.T, R), np.eye(3), atol=atol)
     
     # Check normalization: each column should have a norm of 1
-    normal = np.allclose(np.linalg.norm(R, axis=0), 1)
+    normal = np.allclose(np.linalg.norm(R, axis=0), np.ones(3), atol=atol)
     
     return orthogonal and normal
+
+def find_intersection(P, d):
+    n = P.shape[0]
+    A = np.zeros((3, 3))
+    b = np.zeros(3)
+
+    for i in range(n):
+        di = d[i]
+        Pi = P[i]
+        A += np.eye(3) - np.outer(di, di)
+        b += (np.eye(3) - np.outer(di, di)) @ Pi
+
+    p = np.linalg.solve(A, b)
+    return p
+
+def correct_rotation(R):
+    x = R[:, 0]
+    y = R[:, 1]
+    error = np.dot(x, y)
+    x_ort = x - (error / 2) * y
+    y_ort = y - (error / 2) * x
+    z_ort = np.cross(x_ort, y_ort)
+    x_new = x_ort / np.linalg.norm(x_ort)
+    y_new = y_ort / np.linalg.norm(y_ort)
+    z_new = z_ort / np.linalg.norm(z_ort)
+    
+    return np.column_stack((x_new, y_new, z_new))
