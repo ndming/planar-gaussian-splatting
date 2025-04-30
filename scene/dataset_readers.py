@@ -321,11 +321,11 @@ def readAssemblySceneCameraInfo(view_dir, ref_focal_length, cam_scale, extension
     c2w = np.linalg.inv(w2c)
 
     # Scaling may need orthonormal rotation
-    if cam_scale != 1.0 and not is_orthonormal(c2w[:3, :3], atol=1e-6):
-        c2w[:3, :3] = correct_rotation(c2w[:3, :3])
+    # if cam_scale != 1.0 and not is_orthonormal(c2w[:3, :3], atol=1e-6):
+    #     c2w[:3, :3] = correct_rotation(c2w[:3, :3])
     
     # Scale camera position with respect to the intersection point
-    c2w[:3, 3] = (c2w[:3, 3] - intersection) * cam_scale + intersection
+    c2w[:3, 3] = (c2w[:3, 3] - intersection) * cam_scale
 
     w2c = np.linalg.inv(c2w)
     R = np.transpose(w2c[:3, :3]) # R is stored transposed due to 'glm' in CUDA code
@@ -357,8 +357,8 @@ def readAssemblySceneInfo(path, eval, cam_scale, llffhold=8, extension="png"):
         R = c2w[:3, :3]
         t = c2w[:3, 3]
 
-        if cam_scale != 1.0 and not is_orthonormal(R, atol=1e-6):
-            R = correct_rotation(R)
+        # if cam_scale != 1.0 and not is_orthonormal(R, atol=1e-6):
+        #     R = correct_rotation(R)
 
         assembly_camera_poses.append({'R': R, 't': t})
 
