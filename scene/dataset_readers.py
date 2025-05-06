@@ -82,7 +82,7 @@ def load_poses(pose_path, num):
     poses = np.stack(poses, axis=0)
     return poses
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, masks_folder):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, masks_folder, focalX=None, focalY=None):
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
@@ -100,13 +100,13 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, masks_folde
         T = np.array(extr.tvec)
 
         if intr.model=="SIMPLE_PINHOLE":
-            focal_length_x = intr.params[0]
+            focal_length_x = intr.params[0] if focalX is None else focalX
             focal_length_y = focal_length_x
             FovY = focal2fov(focal_length_y, height)
             FovX = focal2fov(focal_length_x, width)
         elif intr.model=="PINHOLE":
-            focal_length_x = intr.params[0]
-            focal_length_y = intr.params[1]
+            focal_length_x = intr.params[0] if focalX is None else focalX
+            focal_length_y = intr.params[1] if focalY is None else focalY
             FovY = focal2fov(focal_length_y, height)
             FovX = focal2fov(focal_length_x, width)
         else:
@@ -161,9 +161,21 @@ def readColmapSceneInfo(path, images, masks, eval, llffhold=8):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
     reading_dir = "images" if images == None else images
     mask_dir = os.path.join(path, masks) if masks != "" else ""
+
+    focal_x = None
+    focal_y = None
+    try:
+        focal_path = os.path.join(path, "focal.json")
+        with open(focal_path) as file:
+            focal = json.load(file)
+            focal_x = focal["fx"]
+            focal_y = focal["fy"]
+    except:
+        pass
+
     cam_infos_unsorted = readColmapCameras(
         cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, 
-        images_folder=os.path.join(path, reading_dir), masks_folder=mask_dir)
+        images_folder=os.path.join(path, reading_dir), masks_folder=mask_dir, focalX=focal_x, focalY=focal_y)
     # cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : int(x.image_name.split('_')[-1]))
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
     
