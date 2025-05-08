@@ -436,8 +436,105 @@ def readAssemblySceneInfo(path, eval, cam_scale, llffhold=8, extension="png"):
         ply_path=ply_path)
     return scene_info
 
+def readRevipCameras(cam_dir, image_dir, mask_dir):
+    cam_infos = []
+
+    cam_files = [f for f in cam_dir.iterdir() if f.is_file() and f.name.endswith(".json")]
+    for cam_file in cam_files:
+        image_file = image_dir / f"{cam_file.stem}.png"
+        mask_file = mask_dir / f"{cam_file.stem}.png"
+
+        with open(cam_file, "r") as f:
+            cam_json = json.load(f)
+            camera = cam_json["camera"]
+
+
+        fx = camera["camera_matrix"]["fx"]
+        fy = camera["camera_matrix"]["fy"]
+        w = camera["camera_matrix"]["cx"] * 2
+        h = camera["camera_matrix"]["cy"] * 2
+
+        FovY = focal2fov(fy, h)
+        FovX = focal2fov(fx, w)
+
+        c2w = np.array(camera["pose"]["object2world"])
+        c2w[:3, 1:3] *= -1 # Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+
+        w2c = np.linalg.inv(c2w)
+        R = np.transpose(w2c[:3, :3]) # R is stored transposed due to 'glm' in CUDA code
+        T = w2c[:3, 3]
+
+        uid = int(cam_file.stem)
+        cam_info = CameraInfo(
+            uid=uid, global_id=uid, R=R, T=T, FovY=FovY, FovX=FovX,
+            image_path=str(image_file), image_name=cam_file.stem, mask_path=str(mask_file),
+            width=w, height=h, fx=fx, fy=fy)
+
+        cam_infos.append(cam_info)
+
+    return cam_infos
+
+def readRevipSceneInfo(path, eval, llffhold=8):
+    scene_dir = Path(path)
+    image_dir = scene_dir / "images"
+    mask_dir = scene_dir / "masks"
+    cam_dir = scene_dir / "annotations"
+
+    cam_infos_unsorted = readRevipCameras(cam_dir, image_dir, mask_dir)
+    cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
+
+    js_file = f"{path}/split.json"
+    train_list = None
+    test_list = None
+    if os.path.exists(js_file):
+        with open(js_file) as file:
+            meta = json.load(file)
+            train_list = meta["train"]
+            test_list = meta["test"]
+            print(f"train_list {len(train_list)}, test_list {len(test_list)}")
+
+    if train_list is not None:
+        train_cam_infos = [c for idx, c in enumerate(cam_infos) if c.image_name in train_list]
+        test_cam_infos = [c for idx, c in enumerate(cam_infos) if c.image_name in test_list]
+        print(f"train_cam_infos {len(train_cam_infos)}, test_cam_infos {len(test_cam_infos)}")
+    elif eval:
+        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
+        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+    else:
+        train_cam_infos = cam_infos
+        test_cam_infos = []
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+    extent = nerf_normalization["radius"]
+
+    ply_path = scene_dir / "points3d.ply"
+    if not ply_path.exists():
+        # Since this data set has no colmap data, we start with random points
+        num_pts = 100_000
+        print(f"[>] Generating random point cloud ({num_pts})...")
+        
+        # We create random points inside the camera extent
+        xyz = np.random.random((num_pts, 3)) * extent * 2.0 - extent
+        shs = np.random.random((num_pts, 3)) / 255.0
+        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+
+        storePly(ply_path, xyz, SH2RGB(shs) * 255)
+    try:
+        pcd = fetchPly(ply_path)
+    except:
+        pcd = None
+
+    scene_info = SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path)
+    return scene_info
+
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
     "Blender": readNerfSyntheticInfo,
     "Assembly": readAssemblySceneInfo,
+    "Revip": readRevipSceneInfo,
 }
