@@ -18,11 +18,24 @@ import random
 def inverse_sigmoid(x):
     return torch.log(x/(1-x))
 
-def PILtoTorch(pil_image, resolution=None):
-    if resolution is None:
-        resized_image_PIL = pil_image
-    else:
-        resized_image_PIL = pil_image.resize(resolution)
+def mask2torch(pil_mask, resolution):
+    mask = pil_mask.resize(resolution)
+    mask = torch.from_numpy(np.array(mask))
+    mask = mask / torch.max(mask)
+    return mask.unsqueeze(dim=-1).permute(2, 0, 1)
+
+def PILtoTorch(pil_image, resolution, pil_mask=None):
+    if pil_mask is not None:
+        from PIL import Image
+        image_np = np.array(pil_image)
+        rgb_np   = image_np[..., :3]
+        mask_np  = np.expand_dims(np.array(pil_mask), axis=-1)
+        masked_rgb_np = (rgb_np / 255.0) * (mask_np / np.max(mask_np))
+        masked_rgb_np = np.clip(masked_rgb_np, 0.0, 1.0)
+        # Image.fromarray(masked_rgb_np.astype(np.uint8)).save("output/gts/gt.png")
+        pil_image = Image.fromarray((masked_rgb_np * 255).astype(np.uint8))
+
+    resized_image_PIL = pil_image.resize(resolution)
     resized_image = torch.from_numpy(np.array(resized_image_PIL)) / 255.0
     if len(resized_image.shape) == 3:
         return resized_image.permute(2, 0, 1)

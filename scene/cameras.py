@@ -15,9 +15,11 @@ import numpy as np
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix, fov2focal, getProjectionMatrixCenterShift
 import copy
 from PIL import Image
-from utils.general_utils import PILtoTorch
+from utils.general_utils import PILtoTorch, mask2torch
 import os, cv2
 import torch.nn.functional as F
+import torchvision
+from pathlib import Path
 
 def dilate(bin_img, ksize=6):
     pad = (ksize - 1) // 2
@@ -29,28 +31,34 @@ def erode(bin_img, ksize=12):
     out = 1 - dilate(1 - bin_img, ksize)
     return out
 
-def process_image(image_path, resolution, ncc_scale):
+def process_image(uid, image_path, resolution, ncc_scale, use_mask, mask_path):
     image = Image.open(image_path)
+    mask = Image.open(mask_path) if mask_path and use_mask else None
     if len(image.split()) > 3:
-        resized_image_rgb = torch.cat([PILtoTorch(im, resolution) for im in image.split()[:3]], dim=0)
-        loaded_mask = PILtoTorch(image.split()[3], resolution)
+        resized_image_rgb = torch.cat([PILtoTorch(im, resolution, mask) for im in image.split()[:3]], dim=0)
+        loaded_mask = PILtoTorch(image.split()[3], resolution) if not mask else mask2torch(mask, resolution)
         gt_image = resized_image_rgb
         if ncc_scale != 1.0:
             ncc_resolution = (int(resolution[0]/ncc_scale), int(resolution[1]/ncc_scale))
             resized_image_rgb = torch.cat([PILtoTorch(im, ncc_resolution) for im in image.split()[:3]], dim=0)
     else:
-        resized_image_rgb = PILtoTorch(image, resolution)
-        loaded_mask = None
+        resized_image_rgb = PILtoTorch(image, resolution, mask)
+        loaded_mask = mask2torch(mask, resolution) if mask else None
         gt_image = resized_image_rgb
         if ncc_scale != 1.0:
             ncc_resolution = (int(resolution[0]/ncc_scale), int(resolution[1]/ncc_scale))
-            resized_image_rgb = PILtoTorch(image, ncc_resolution)
+            resized_image_rgb = PILtoTorch(image, ncc_resolution, mask)
     gray_image = (0.299 * resized_image_rgb[0] + 0.587 * resized_image_rgb[1] + 0.114 * resized_image_rgb[2])[None]
+
+    # gt_dir = Path("output/gts")
+    # os.makedirs(gt_dir, exist_ok=True)
+    # torchvision.utils.save_image(gt_image.clamp(0.0, 1.0), gt_dir / f"{uid}.png")
     return gt_image, gray_image, loaded_mask
 
 def process_mask(mask_path, resolution):
     mask = Image.open(mask_path).resize(resolution)
-    mask = torch.from_numpy(np.array(mask)) / 255.
+    mask = torch.from_numpy(np.array(mask))
+    mask = mask / torch.max(mask)
     mask = mask.unsqueeze(dim=-1)
     return mask.permute(2, 0, 1)
 
@@ -58,7 +66,7 @@ class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy,
                  image_width, image_height,
                  image_path, image_name, uid,
-                 mask_path,
+                 mask_path, use_mask=False,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, 
                  ncc_scale=1.0,
                  preload_img=True, data_device = "cuda"
@@ -92,7 +100,7 @@ class Camera(nn.Module):
         self.preload_img = preload_img
         self.ncc_scale = ncc_scale
         if self.preload_img:
-            gt_image, gray_image, loaded_mask = process_image(self.image_path, self.resolution, ncc_scale)
+            gt_image, gray_image, loaded_mask = process_image(uid, self.image_path, self.resolution, ncc_scale, use_mask, mask_path)
             self.original_image = gt_image.to(self.data_device)
             self.original_image_gray = gray_image.to(self.data_device)
             self.mask = process_mask(mask_path, self.resolution) if mask_path else loaded_mask
@@ -113,7 +121,7 @@ class Camera(nn.Module):
         if self.preload_img:
             return self.original_image.cuda(), self.original_image_gray.cuda()
         else:
-            gt_image, gray_image, _ = process_image(self.image_path, self.resolution, self.ncc_scale)
+            gt_image, gray_image, _ = process_image(self.uid, self.image_path, self.resolution, self.ncc_scale)
             return gt_image.cuda(), gray_image.cuda()
 
     def get_calib_matrix_nerf(self, scale=1.0):

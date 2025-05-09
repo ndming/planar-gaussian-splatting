@@ -53,7 +53,7 @@ class Scene:
             scene_info = sceneLoadTypeCallbacks["Assembly"](args.source_path, args.eval, args.cam_scale)
         elif os.path.exists(os.path.join(args.source_path, "annotations")):
             print("[>] Found annotations directory, assuming Revip dataset!")
-            scene_info = sceneLoadTypeCallbacks["Revip"](args.source_path, args.eval)
+            scene_info = sceneLoadTypeCallbacks["Revip"](args.source_path, args.eval, args.cam_scale)
         else:
             assert False, "Could not recognize scene type!"
 

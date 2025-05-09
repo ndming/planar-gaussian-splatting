@@ -436,10 +436,30 @@ def readAssemblySceneInfo(path, eval, cam_scale, llffhold=8, extension="png"):
         ply_path=ply_path)
     return scene_info
 
-def readRevipCameras(cam_dir, image_dir, mask_dir):
+def readRevipCameras(cam_dir, image_dir, mask_dir, cam_scale):
     cam_infos = []
 
     cam_files = [f for f in cam_dir.iterdir() if f.is_file() and f.name.endswith(".json")]
+
+    # Peak the poses to find the intersection point
+    camera_poses = []
+    for cam_file in cam_files:
+        with open(cam_file, "r") as f:
+            cam_json = json.load(f)
+            camera = cam_json["camera"]
+
+        c2w = np.array(camera["pose"]["object2world"])
+
+        R = c2w[:3, :3]
+        t = c2w[:3, 3]
+
+        camera_poses.append({ "R": R, "t": t })
+    P = np.array([pose['t'] for pose in camera_poses])
+    d = np.array([pose['R'][:, 2] for pose in camera_poses])
+    intersection_point = find_intersection(P, d)
+    if cam_scale != 1.0:
+        print(f"Intersection point: {intersection_point}")
+
     for cam_file in cam_files:
         image_file = image_dir / f"{cam_file.stem}.png"
         mask_file = mask_dir / f"{cam_file.stem}.png"
@@ -458,8 +478,8 @@ def readRevipCameras(cam_dir, image_dir, mask_dir):
         FovX = focal2fov(fx, w)
 
         c2w = np.array(camera["pose"]["object2world"])
-        c2w[:3, 1:3] *= -1 # Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
-
+        if cam_scale != 1.0:
+            c2w[:3, 3] = (c2w[:3, 3] - intersection_point) * cam_scale
         w2c = np.linalg.inv(c2w)
         R = np.transpose(w2c[:3, :3]) # R is stored transposed due to 'glm' in CUDA code
         T = w2c[:3, 3]
@@ -474,13 +494,13 @@ def readRevipCameras(cam_dir, image_dir, mask_dir):
 
     return cam_infos
 
-def readRevipSceneInfo(path, eval, llffhold=8):
+def readRevipSceneInfo(path, eval, cam_scale=1.0, llffhold=8):
     scene_dir = Path(path)
     image_dir = scene_dir / "images"
     mask_dir = scene_dir / "masks"
     cam_dir = scene_dir / "annotations"
 
-    cam_infos_unsorted = readRevipCameras(cam_dir, image_dir, mask_dir)
+    cam_infos_unsorted = readRevipCameras(cam_dir, image_dir, mask_dir, cam_scale)
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
     js_file = f"{path}/split.json"
@@ -507,7 +527,7 @@ def readRevipSceneInfo(path, eval, llffhold=8):
     nerf_normalization = getNerfppNorm(train_cam_infos)
     extent = nerf_normalization["radius"]
 
-    ply_path = scene_dir / "points3d.ply"
+    ply_path = scene_dir / "points3d.ply" if cam_scale == 1.0 else scene_dir / f"points3d-{cam_scale}.ply"
     if not ply_path.exists():
         # Since this data set has no colmap data, we start with random points
         num_pts = 100_000

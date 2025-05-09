@@ -49,7 +49,8 @@ def loadCam(args, id, cam_info, resolution_scale):
                   image_name=cam_info.image_name, uid=cam_info.global_id, 
                   preload_img=args.preload_img, 
                   ncc_scale=args.ncc_scale,
-                  data_device=args.data_device)
+                  data_device=args.data_device,
+                  use_mask=args.use_mask)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     camera_list = []

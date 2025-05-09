@@ -93,8 +93,8 @@ def render_set(model_path, name, iteration, views, scene, gaussians, pipeline, b
         normal = normal.detach().cpu().numpy()
         normal = ((normal+1) * 127.5).astype(np.uint8).clip(0, 255)
 
+        torchvision.utils.save_image(gt.clamp(0.0, 1.0), os.path.join(gts_path, view.image_name + ".png"))
         if name == 'test':
-            torchvision.utils.save_image(gt.clamp(0.0, 1.0), os.path.join(gts_path, view.image_name + ".png"))
             torchvision.utils.save_image(rendering, os.path.join(render_path, view.image_name + ".png"))
         else:
             rendering_np = (rendering.permute(1,2,0).clamp(0,1)[:,:,[2,1,0]]*255).detach().cpu().numpy().astype(np.uint8)
