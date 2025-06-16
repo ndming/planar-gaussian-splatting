@@ -521,11 +521,15 @@ class GaussianModel:
         self.denom[update_filter] += 1
         self.denom_abs[update_filter] += 1
 
-    def get_points_depth_in_depth_map(self, fov_camera, depth, points_in_camera_space, scale=1):
+    def get_points_depth_in_depth_map(self, fov_camera, depth, normal, points_in_camera_space, scale=1):
         st = max(int(scale/2)-1,0)
         depth_view = depth[None,:,st::scale,st::scale]
+        normal_view = normal[None, :, st::scale, st::scale] # (1, 3, H', W')
+
         W, H = int(fov_camera.image_width/scale), int(fov_camera.image_height/scale)
         depth_view = depth_view[:H, :W]
+        normal_view = normal_view[:, :, :H, :W]
+
         pts_projections = torch.stack(
                         [points_in_camera_space[:,0] * fov_camera.Fx / points_in_camera_space[:,2] + fov_camera.Cx,
                          points_in_camera_space[:,1] * fov_camera.Fy / points_in_camera_space[:,2] + fov_camera.Cy], -1).float()/scale
@@ -536,13 +540,27 @@ class GaussianModel:
         pts_projections[..., 1] /= ((H - 1) / 2)
         pts_projections -= 1
         pts_projections = pts_projections.view(1, -1, 1, 2)
+
         map_z = torch.nn.functional.grid_sample(input=depth_view,
                                                 grid=pts_projections,
                                                 mode='bilinear',
                                                 padding_mode='border',
                                                 align_corners=True
                                                 )[0, :, :, 0]
-        return map_z, mask
+        
+        # Sample normals: (N, 3)
+        map_n = torch.nn.functional.grid_sample(
+            input=normal_view,
+            grid=pts_projections,
+            mode='bilinear',
+            padding_mode='border',
+            align_corners=True)[0, :, :, 0].permute(1, 0)
+        
+        # Rotate normals to world coordinates
+        map_n = map_n @ fov_camera.world_view_transform[:3, :3].T
+        map_n = map_n / (map_n.norm(dim=1, keepdim=True) + 1e-8)
+
+        return map_z, map_n, mask
     
     def get_points_from_depth(self, fov_camera, depth, scale=1):
         st = int(max(int(scale/2)-1,0))

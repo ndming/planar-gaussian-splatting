@@ -78,6 +78,29 @@ def gen_virtul_cam(cam, trans_noise=1.0, deg_noise=15.0):
                         preload_img=False, data_device = "cuda")
     return virtul_cam
 
+def sample_normal_map(pixels, normal_map):
+    # pixels: (H, W, 2)
+    # normal_map: (3, H, W)
+    H, W = pixels.shape[:2]
+    pixels_flat = pixels.view(-1, 2) # (N, 2)
+
+    # Normalize for grid_sample
+    norm_pixels = pixels_flat.clone()
+    norm_pixels[:, 0] = norm_pixels[:, 0] / ((W - 1) / 2) - 1
+    norm_pixels[:, 1] = norm_pixels[:, 1] / ((H - 1) / 2) - 1
+    norm_pixels = norm_pixels.view(1, -1, 1, 2)
+
+    # Prepare normal map for grid_sample: (1, 3, H, W)
+    ref_normal_map = normal_map.unsqueeze(0)
+    normals = F.grid_sample(
+        input=ref_normal_map,
+        grid=norm_pixels,
+        mode='bilinear',
+        padding_mode='border',
+        align_corners=True)[0, :, :, 0].permute(1, 0) # (N, 3)
+
+    return normals
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
@@ -215,13 +238,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     torch.arange(W), torch.arange(H), indexing='xy')
                 pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['plane_depth'].device)
 
-                nearest_render_pkg = render(nearest_cam, gaussians, pipe, bg, app_model=app_model,
-                                            return_plane=True, return_depth_normal=False)
+                nearest_render_pkg = render(
+                    nearest_cam, gaussians, pipe, bg, app_model=app_model,
+                    return_plane=True, return_depth_normal=False)
 
                 pts = gaussians.get_points_from_depth(viewpoint_cam, render_pkg['plane_depth'])
                 pts_in_nearest_cam = pts @ nearest_cam.world_view_transform[:3,:3] + nearest_cam.world_view_transform[3,:3]
-                map_z, d_mask = gaussians.get_points_depth_in_depth_map(nearest_cam, nearest_render_pkg['plane_depth'], pts_in_nearest_cam)
-                
+                map_z, map_n, d_mask = gaussians.get_points_depth_in_depth_map(
+                    nearest_cam, nearest_render_pkg['plane_depth'], nearest_render_pkg["rendered_normal"], pts_in_nearest_cam)
+
+                # Occlusion
+                d_mask = d_mask & (pts_in_nearest_cam[:, 2] - map_z.squeeze() <= 5e-4)
+
                 pts_in_nearest_cam = pts_in_nearest_cam / (pts_in_nearest_cam[:,2:3])
                 pts_in_nearest_cam = pts_in_nearest_cam * map_z.squeeze()[...,None]
                 R = torch.tensor(nearest_cam.R).float().cuda()
@@ -232,9 +260,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             [pts_in_view_cam[:,0] * viewpoint_cam.Fx / pts_in_view_cam[:,2] + viewpoint_cam.Cx,
                             pts_in_view_cam[:,1] * viewpoint_cam.Fy / pts_in_view_cam[:,2] + viewpoint_cam.Cy], -1).float()
                 pixel_noise = torch.norm(pts_projections - pixels.reshape(*pts_projections.shape), dim=-1)
+
+                # Sample normals at the pixel locations in the reference camera's view
+                normals = sample_normal_map(pixels, render_pkg["rendered_normal"]) # (N, 3)
+                normals = normals @ viewpoint_cam.world_view_transform[:3, :3].T
+                normals = normals / (normals.norm(dim=1, keepdim=True) + 1e-8)
+                # Compute cosine similarity between normals in ref view and sampled normals in neighbor view
+                cos_sim = torch.sum(normals * map_n, dim=1) # (N,)
+                angle_error_rad = torch.acos(cos_sim.clamp(-1 + 1e-6, 1 - 1e-6)) # [0, pi]
+                angle_threshold = 30.0 * torch.pi / 180.0 # to radians
+                # Mask for variations within threshold
+                normal_valid = d_mask & (angle_error_rad < angle_threshold)
+                # n_loss = angle_error_rad[normal_valid].mean() if normal_valid.sum() > 0 else 0.0
+                # focal = (viewpoint_cam.Fx + viewpoint_cam.Fy) / 2.0
+                n_loss = 1.0 * angle_error_rad
+
                 if not opt.wo_use_geo_occ_aware:
-                    d_mask = d_mask & (pixel_noise < pixel_noise_th)
-                    weights = (1.0 / torch.exp(pixel_noise)).detach()
+                    # d_mask = d_mask & (pixel_noise < pixel_noise_th)
+                    # weights = (1.0 / torch.exp(pixel_noise)).detach()
+                    weights = torch.exp(-pixel_noise * 3.0).detach()
                     weights[~d_mask] = 0
                 else:
                     d_mask = d_mask
@@ -267,7 +311,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     cv2.imwrite(os.path.join(debug_path, "%05d"%iteration + "_" + viewpoint_cam.image_name + ".jpg"), image_to_show)
 
                 if d_mask.sum() > 0:
-                    geo_loss = geo_weight * ((weights * pixel_noise)[d_mask]).mean()
+                    geo_loss = geo_weight * (((weights * pixel_noise)[d_mask]).mean() + (weights * n_loss)[normal_valid].mean())
                     loss += geo_loss
                     if use_virtul_cam is False:
                         with torch.no_grad():
