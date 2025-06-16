@@ -273,12 +273,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 normal_valid = d_mask & (angle_error_rad < angle_threshold)
                 # n_loss = angle_error_rad[normal_valid].mean() if normal_valid.sum() > 0 else 0.0
                 # focal = (viewpoint_cam.Fx + viewpoint_cam.Fy) / 2.0
-                n_loss = 1.0 * angle_error_rad
+                n_loss = opt.angle_error_factor * angle_error_rad
 
                 if not opt.wo_use_geo_occ_aware:
                     # d_mask = d_mask & (pixel_noise < pixel_noise_th)
                     # weights = (1.0 / torch.exp(pixel_noise)).detach()
-                    weights = torch.exp(-pixel_noise * 3.0).detach()
+                    weights = torch.exp(-pixel_noise * opt.weight_decay_rate).detach()
                     weights[~d_mask] = 0
                 else:
                     d_mask = d_mask

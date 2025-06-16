@@ -119,6 +119,9 @@ class OptimizationParams(ParamGroup):
         self.max_all_points = 6000_000
         self.exposure_compensation = False
         self.random_background = False
+
+        self.weight_decay_rate = 3.0
+        self.angle_error_factor = 1.0
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):
