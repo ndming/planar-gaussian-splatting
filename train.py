@@ -248,7 +248,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     nearest_cam, nearest_render_pkg['plane_depth'], nearest_render_pkg["rendered_normal"], pts_in_nearest_cam)
 
                 # Occlusion
-                d_mask = d_mask & (pts_in_nearest_cam[:, 2] - map_z.squeeze() <= 5e-4)
+                # d_mask = d_mask & (pts_in_nearest_cam[:, 2] - map_z.squeeze() <= opt.occlusion_threshold)
 
                 pts_in_nearest_cam = pts_in_nearest_cam / (pts_in_nearest_cam[:,2:3])
                 pts_in_nearest_cam = pts_in_nearest_cam * map_z.squeeze()[...,None]
@@ -262,23 +262,23 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 pixel_noise = torch.norm(pts_projections - pixels.reshape(*pts_projections.shape), dim=-1)
 
                 # Sample normals at the pixel locations in the reference camera's view
-                normals = sample_normal_map(pixels, render_pkg["rendered_normal"]) # (N, 3)
-                normals = normals @ viewpoint_cam.world_view_transform[:3, :3].T
-                normals = normals / (normals.norm(dim=1, keepdim=True) + 1e-8)
-                # Compute cosine similarity between normals in ref view and sampled normals in neighbor view
-                cos_sim = torch.sum(normals * map_n, dim=1) # (N,)
-                angle_error_rad = torch.acos(cos_sim.clamp(-1 + 1e-6, 1 - 1e-6)) # [0, pi]
-                angle_threshold = 30.0 * torch.pi / 180.0 # to radians
-                # Mask for variations within threshold
-                normal_valid = d_mask & (angle_error_rad < angle_threshold)
-                # n_loss = angle_error_rad[normal_valid].mean() if normal_valid.sum() > 0 else 0.0
-                # focal = (viewpoint_cam.Fx + viewpoint_cam.Fy) / 2.0
-                n_loss = opt.angle_error_factor * angle_error_rad
+                # normals = sample_normal_map(pixels, render_pkg["rendered_normal"]) # (N, 3)
+                # normals = normals @ viewpoint_cam.world_view_transform[:3, :3].T
+                # normals = normals / (normals.norm(dim=1, keepdim=True) + 1e-8)
+                # # Compute cosine similarity between normals in ref view and sampled normals in neighbor view
+                # cos_sim = torch.sum(normals * map_n, dim=1) # (N,)
+                # angle_error_rad = torch.acos(cos_sim.clamp(-1 + 1e-6, 1 - 1e-6)) # [0, pi]
+                # angle_threshold = 30.0 * torch.pi / 180.0 # to radians
+                # # Mask for variations within threshold
+                # normal_valid = d_mask & (angle_error_rad < angle_threshold)
+                # # n_loss = angle_error_rad[normal_valid].mean() if normal_valid.sum() > 0 else 0.0
+                # # focal = (viewpoint_cam.Fx + viewpoint_cam.Fy) / 2.0
+                # n_loss = opt.angle_error_factor * angle_error_rad
 
                 if not opt.wo_use_geo_occ_aware:
-                    # d_mask = d_mask & (pixel_noise < pixel_noise_th)
-                    # weights = (1.0 / torch.exp(pixel_noise)).detach()
-                    weights = torch.exp(-pixel_noise * opt.weight_decay_rate).detach()
+                    d_mask = d_mask & (pixel_noise < pixel_noise_th)
+                    weights = (1.0 / torch.exp(pixel_noise)).detach()
+                    # weights = torch.exp(-pixel_noise * opt.weight_decay_rate).detach()
                     weights[~d_mask] = 0
                 else:
                     d_mask = d_mask
@@ -311,7 +311,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     cv2.imwrite(os.path.join(debug_path, "%05d"%iteration + "_" + viewpoint_cam.image_name + ".jpg"), image_to_show)
 
                 if d_mask.sum() > 0:
-                    geo_loss = geo_weight * (((weights * pixel_noise)[d_mask]).mean() + (weights * n_loss)[normal_valid].mean())
+                    geo_loss = geo_weight * (((weights * pixel_noise)[d_mask]).mean()) # + (weights * n_loss)[normal_valid].mean())
                     loss += geo_loss
                     if use_virtul_cam is False:
                         with torch.no_grad():
