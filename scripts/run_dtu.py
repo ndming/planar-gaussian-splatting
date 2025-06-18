@@ -40,7 +40,7 @@ for scene, abs_split in zip(scenes, max_abs):
 #     print("[>] " + cmd)
 #     os.system(cmd)
 
-    common_args = f"-r 2 --ncc_scale 0.5 --max_abs_split_points {abs_split} --multi_view_weight_from_iter 5000"
+    common_args = f"-r 2 --ncc_scale 0.5 --max_abs_split_points {abs_split} --multi_view_weight_from_iter 5000 --single_view_weight_from_iter 5000"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)
@@ -66,7 +66,7 @@ for scene in scenes:
 #     print("[>] " + cmd)
 #     os.system(cmd)
 
-    common_args = f"-r 2 --ncc_scale 0.5 --multi_view_weight_from_iter 5000"
+    common_args = f"-r 2 --ncc_scale 0.5 --multi_view_weight_from_iter 5000 --single_view_weight_from_iter 5000"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)
